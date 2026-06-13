@@ -1,0 +1,8 @@
+*.exe
+*.pcap
+*.pcapng
+output.pcap
+report.html
+__pycache__/
+test_sni.cpp
+test_sni.exe
