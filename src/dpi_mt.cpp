@@ -241,12 +241,14 @@ struct Stats {
     std::unordered_map<AppType, uint64_t> app_counts;
     std::unordered_map<std::string, AppType> detected_snis;
     std::map<uint32_t, std::unordered_map<AppType, uint64_t>> timeline;
+    std::unordered_map<std::string, uint64_t> domain_packet_counts;
 
     void recordApp(AppType app, const std::string& sni, uint32_t ts_sec = 0) {
         std::lock_guard<std::mutex> lock(app_mutex);
         app_counts[app]++;
         if (!sni.empty()) {
             detected_snis[sni] = app;
+            domain_packet_counts[sni]++;
         }
         if (ts_sec > 0) {
             timeline[ts_sec][app]++;
@@ -437,6 +439,7 @@ private:
 
         // DNS
         if (pkt.tuple.dst_port == 53 || pkt.tuple.src_port == 53) {
+            }
             const uint8_t* payload = pkt.data.data() + pkt.payload_offset;
 
             // Parse query
@@ -446,19 +449,12 @@ private:
                 if (app != AppType::UNKNOWN) {
                     dns_map_->recordDomain(*domain, app);
                 }
-            }
-
-            // Parse response (build IP->app map)
             parseDNSResponse(payload, pkt.payload_length, *dns_map_);
             flow.sni = domain ? *domain : "";
             {
                 AppType _dns_app = flow.sni.empty() ? AppType::DNS : sniToAppType(flow.sni);
                 flow.app_type = (_dns_app != AppType::HTTPS && _dns_app != AppType::UNKNOWN) ? _dns_app : AppType::DNS;
             }
-
-
-
-            flow.sni = domain ? *domain : "";
             flow.classified = true;
             return;
         }
@@ -706,7 +702,7 @@ private:
         std::cout << "║                   APPLICATION BREAKDOWN                       ║\n";
         std::cout << "╠══════════════════════════════════════════════════════════════╣\n";
 
-        std::unique_lock<std::mutex> lock(stats_.app_mutex);
+        std::lock_guard<std::mutex> lock(stats_.app_mutex);
         std::vector<std::pair<AppType, uint64_t>> sorted_apps(stats_.app_counts.begin(), stats_.app_counts.end());
         std::sort(sorted_apps.begin(), sorted_apps.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
 
@@ -737,15 +733,16 @@ private:
         rdata.forwarded = stats_.forwarded.load();
         rdata.dropped = stats_.dropped.load();
         {
-    
+            
             rdata.app_counts = stats_.app_counts;
             rdata.detected_snis = stats_.detected_snis;
             rdata.timeline = stats_.timeline;
+            rdata.top_talkers.assign(stats_.domain_packet_counts.begin(), stats_.domain_packet_counts.end());
+            std::sort(rdata.top_talkers.begin(), rdata.top_talkers.end(),
+                [](const auto& a, const auto& b) { return a.second > b.second; });
         }
         rdata.input_file = current_input_file_;
-        lock.unlock();
         rdata.blocked_rules = blocked_rules_;
-
 
         if (ReportGenerator::generate("report.html", rdata)) {
             std::cout << "\n\033[32m✅ HTML Report saved: report.html\033[0m\n";
